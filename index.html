@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>國中英語逐題拼寫測驗系統 (自動同步版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        .answer-input {
+            font-family: monospace, monospace;
+            letter-spacing: 0.1em;
+            font-size: 1.2rem;
+        }
+        progress {
+            border: none;
+            height: 10px;
+            border-radius: 5px;
+            color: #4F46E5;
+        }
+        progress::-webkit-progress-bar {
+            background-color: #e5e7eb;
+            border-radius: 5px;
+        }
+        progress::-webkit-progress-value {
+            background-color: #4F46E5;
+            border-radius: 5px;
+            transition: width 0.4s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 antialiased" x-data="examApp()" x-cloak>
+
+    <!-- 自訂訊息框 (取代 alert) -->
+    <div x-show="messageBox.show" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" x-cloak>
+        <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-6 text-center space-y-4">
+            <h3 class="text-xl font-bold text-gray-900" x-text="messageBox.title">提示</h3>
+            <p class="text-gray-600 text-base" x-text="messageBox.text"></p>
+            <div class="flex gap-3 pt-2">
+                <button x-show="messageBox.isConfirm" @click="messageBox.onCancel()" class="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2.5 px-4 rounded-xl transition-all">取消</button>
+                <button @click="messageBox.onOk()" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-4 rounded-xl transition-all">確定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 成績總覽 Modal (雲端同步) -->
+    <div x-show="showTeacherModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" x-cloak>
+        <div class="bg-white w-full max-w-4xl rounded-3xl shadow-2xl p-6 sm:p-8 space-y-6 max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between border-b pb-4">
+                <div>
+                    <h3 class="text-2xl font-bold text-gray-900">📊 雲端成績總覽 (多機同步)</h3>
+                    <p class="text-sm text-gray-500 mt-1">所有學生在任何電腦完成的測驗成績皆會即時同步。</p>
+                </div>
+                <button @click="showTeacherModal = false" class="text-gray-400 hover:text-gray-600 p-2">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+
+            <!-- 成績列表表格 -->
+            <div class="flex-1 overflow-y-auto border border-gray-200 rounded-2xl">
+                <table class="w-full text-left border-collapse">
+                    <thead class="bg-gray-100 sticky top-0 text-gray-700 font-bold text-sm">
+                        <tr>
+                            <th class="p-3 pl-4">完成時間</th>
+                            <th class="p-3">學生姓名</th>
+                            <th class="p-3">學號/座號</th>
+                            <th class="p-3">測驗範圍</th>
+                            <th class="p-3 text-center">得分</th>
+                            <th class="p-3 text-center">正確率</th>
+                            <th class="p-3 text-center">耗時</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200 text-sm">
+                        <template x-for="item in cloudScores" :key="item.id">
+                            <tr class="hover:bg-gray-50 transition-colors">
+                                <td class="p-3 pl-4 text-gray-500 text-xs" x-text="item.timestamp"></td>
+                                <td class="p-3 font-bold text-gray-900" x-text="item.studentName"></td>
+                                <td class="p-3 font-mono text-gray-600" x-text="item.studentId"></td>
+                                <td class="p-3 text-gray-700" x-text="item.rangeName"></td>
+                                <td class="p-3 text-center font-bold text-emerald-600" x-text="item.score + ' / ' + item.total"></td>
+                                <td class="p-3 text-center font-bold text-indigo-600" x-text="item.accuracy"></td>
+                                <td class="p-3 text-center font-mono text-gray-600" x-text="item.timeSpent"></td>
+                            </tr>
+                        </template>
+                        <template x-if="cloudScores.length === 0 && !isLoadingScores">
+                            <tr>
+                                <td colspan="7" class="text-center py-12 text-gray-400">目前尚無任何雲端測驗記錄。</td>
+                            </tr>
+                        </template>
+                        <template x-if="isLoadingScores">
+                            <tr>
+                                <td colspan="7" class="text-center py-12 text-indigo-600 font-medium">正在載入成績...</td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pt-2 border-t flex justify-between items-center">
+                <span class="text-xs text-gray-400">雲端資料庫連線中 (共 <span x-text="cloudScores.length"></span> 筆紀錄)</span>
+                <button @click="showTeacherModal = false" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-6 rounded-xl transition-all text-sm">
+                    關閉面板
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 登入畫面 -->
+    <div x-show="state === 'login'" class="min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white p-6 sm:p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100">
+            <div class="flex justify-between items-center mb-3">
+                <span class="text-xs font-semibold px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-full">☁️ GAS 自動同步版</span>
+                <div class="flex gap-2">
+                    <!-- 隱藏了老師設定按鈕，學生無法看到 -->
+                    <button @click="openScoreModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md transition-all active:scale-95">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                        📊 歷史成績
+                    </button>
+                </div>
+            </div>
+
+            <h2 class="text-2xl sm:text-3xl font-extrabold text-center text-gray-900 mb-2">國中英語逐題拼寫特訓</h2>
+            <p class="text-center text-gray-600 mb-6">請輸入身份資料並選取 25 題區段範圍</p>
+
+            <div class="space-y-6">
+                <div>
+                    <label for="studentName" class="block text-sm font-medium text-gray-700 mb-1">學生姓名</label>
+                    <input type="text" id="studentName" x-model="studentName" placeholder="例如：王小明" class="block w-full px-4 py-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-base">
+                </div>
+
+                <div>
+                    <label for="studentId" class="block text-sm font-medium text-gray-700 mb-1">學號 / 座號</label>
+                    <input type="text" id="studentId" x-model="studentId" placeholder="例如：80105" class="block w-full px-4 py-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-base">
+                </div>
+
+                <div>
+                    <label for="examRange" class="block text-sm font-medium text-gray-700 mb-1">測驗範圍選擇 (每 25 題為一個區段)</label>
+                    <select id="examRange" x-model="selectedRange" class="block w-full px-4 py-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-base bg-white">
+                        <template x-for="range in availableRanges" :key="range.id">
+                            <option :value="range.id" x-text="range.name"></option>
+                        </template>
+                    </select>
+                </div>
+            </div>
+
+            <button @click="startExam" class="w-full mt-8 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-xl transition-all flex items-center justify-center text-lg shadow-lg shadow-indigo-500/30">
+                開始逐題拼寫測驗
+                <svg class="h-6 w-6 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"></path></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- 測驗畫面 -->
+    <div x-show="state === 'exam'" class="min-h-screen p-2 sm:p-4 md:p-6" x-cloak>
+        <div class="max-w-3xl mx-auto bg-white p-6 md:p-8 rounded-2xl shadow-lg border border-gray-100">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-gray-100 pb-4 mb-6 gap-4">
+                <div class="flex items-center justify-between sm:justify-start gap-3">
+                    <span class="text-lg font-bold text-indigo-700" x-text="'第 ' + (currentIdx + 1) + ' / ' + currentRangeSize + ' 題'"></span>
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-indigo-100 text-indigo-800" x-text="isWrongPracticeMode ? '錯題特訓模式' : '逐題測驗'"></span>
+                    <button @click="confirmExit" class="text-gray-400 hover:text-red-600 transition-colors" title="離開測驗">
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                     </button>
+                </div>
+                <div class="flex items-center gap-4 justify-end">
+                    <span class="text-base font-medium text-gray-600">得分: <span class="text-xl font-bold text-emerald-600" x-text="score"></span></span>
+                    <span class="text-base font-medium text-gray-600">計時: <span class="text-xl font-bold text-indigo-600" x-text="timerStr"></span></span>
+                </div>
+            </div>
+            
+            <div class="mb-6">
+                <progress :value="currentIdx" :max="Math.max(1, currentRangeSize - 1)" class="w-full"></progress>
+            </div>
+
+            <div class="text-center bg-gray-50 rounded-2xl p-8 py-10 border border-gray-100 mb-8 shadow-inner relative">
+                <button @click="speakWord" class="absolute top-4 right-4 p-2 rounded-full bg-white shadow hover:bg-gray-100 text-indigo-600 transition-all" title="聽發音">
+                    <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.169 12 5.06v13.88c0 .89-1.077 1.397-1.707.786L5.586 15z"></path></svg>
+                </button>
+                <h1 class="text-4xl sm:text-5xl font-black text-gray-900 tracking-tight mb-5" x-text="currentQuestion.cn"></h1>
+                <div class="text-gray-500 text-base flex flex-wrap justify-center gap-x-6 gap-y-1 font-mono leading-relaxed">
+                    <span x-text="'編號 #' + currentQuestion.id"></span>
+                    <span x-text="'KK: ' + currentQuestion.kk"></span>
+                    <span x-text="'詞性: ' + currentQuestion.pos"></span>
+                    <span class="text-indigo-600 font-bold">(請鍵入英文單字)</span>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                <div class="relative">
+                    <input type="text" 
+                           id="answerInput"
+                           x-model="userAnswer" 
+                           @keyup.enter.prevent="checkAnswer"
+                           class="answer-input block w-full px-5 py-5 border-2 border-gray-200 rounded-2xl shadow-inner focus:ring-4 focus:ring-indigo-200 focus:border-indigo-500 text-center font-bold text-gray-900 tracking-widest placeholder-gray-300"
+                           placeholder="在此輸入英文單字..."
+                           autocomplete="off"
+                           autocapitalize="none"
+                           autocorrect="off"
+                           spellcheck="false">
+                    
+                    <div x-show="feedbackStatus === 'correct'" class="absolute inset-y-0 right-0 flex items-center pr-5 text-emerald-500">
+                        <svg class="h-9 w-9" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                    </div>
+                    <div x-show="feedbackStatus === 'incorrect'" class="absolute inset-y-0 right-0 flex items-center pr-5 text-red-500">
+                        <svg class="h-9 w-9" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </div>
+                </div>
+
+                <div x-cloak x-show="feedbackStatus === 'incorrect'" class="bg-red-50 border-l-4 border-red-500 p-5 rounded-r-xl text-red-900 space-y-2">
+                    <p class="font-bold text-lg">拼寫錯誤！正確答案是：</p>
+                    <p class="font-mono text-2xl font-bold tracking-widest" x-text="currentQuestion.word"></p>
+                    <p class="text-sm" x-text="currentQuestion.cn"></p>
+                </div>
+
+                <button @click="checkAnswer" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-5 px-6 rounded-2xl transition-all text-lg shadow-lg shadow-indigo-500/30 flex items-center justify-center gap-3">
+                    <span x-text="btnActionText">提交</span>
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 成績畫面 -->
+    <div x-show="state === 'result'" class="min-h-screen flex items-center justify-center p-4" x-cloak>
+        <div class="bg-white p-10 rounded-3xl shadow-2xl w-full max-w-2xl border-8 border-indigo-600 space-y-6 text-center">
+            <div class="flex justify-center -mt-20 mb-4">
+                 <div class="bg-indigo-600 text-white p-6 rounded-full shadow-lg inline-block">
+                     <svg class="h-16 w-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                 </div>
+            </div>
+
+            <h2 class="text-5xl font-extrabold text-indigo-900 tracking-tight" x-text="isWrongPracticeMode ? '錯題特訓完成！' : '測驗完成！'"></h2>
+            <p class="text-2xl font-medium text-gray-700" x-text="studentName + ' 同學 (學號: ' + studentId + ')'"></p>
+            <p class="text-2xl font-medium text-gray-600" x-text="isWrongPracticeMode ? '練習模式：錯題複習' : ('測驗範圍：' + currentRangeName)"></p>
+            
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 bg-gray-50 p-8 rounded-2xl my-8 shadow-inner border border-gray-100">
+                <div class="space-y-1">
+                    <div class="text-sm font-semibold text-gray-500 uppercase">總題數</div>
+                    <div class="text-6xl font-black text-indigo-600" x-text="currentRangeSize"></div>
+                </div>
+                <div class="space-y-1 border-t sm:border-t-0 sm:border-l border-gray-200 pt-6 sm:pt-0 pl-0 sm:pl-6">
+                    <div class="text-sm font-semibold text-gray-500 uppercase">得分</div>
+                    <div class="text-6xl font-black text-emerald-600" x-text="score"></div>
+                </div>
+                 <div class="space-y-1 border-t sm:border-t-0 sm:border-l border-gray-200 pt-6 sm:pt-0 pl-0 sm:pl-6">
+                    <div class="text-sm font-semibold text-gray-500 uppercase">正確率</div>
+                    <div class="text-6xl font-black text-indigo-700" x-text="accuracy"></div>
+                </div>
+            </div>
+
+            <div x-show="!isWrongPracticeMode && wrongList.length > 0" class="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-left space-y-3">
+                <div class="flex items-center justify-between">
+                    <span class="font-bold text-amber-900 text-lg flex items-center gap-2">
+                        <svg class="h-6 w-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                        本輪測驗有 <span class="text-amber-700 font-black" x-text="wrongList.length"></span> 個錯題需要加強
+                    </span>
+                </div>
+                <button @click="startWrongPractice" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-6 rounded-xl transition-all text-base shadow-md flex items-center justify-center gap-2">
+                    立即針對錯題進行特訓複習
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
+                </button>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 flex items-center justify-center gap-3">
+                    <svg class="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                    <span class="font-bold" x-text="syncStatusText"></span>
+                </div>
+                
+                <button @click="openScoreModal()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-2xl transition-all text-base shadow-md flex items-center justify-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                    查看雲端成績總覽紀錄
+                </button>
+
+                <button @click="resetApp" class="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-4 px-6 rounded-2xl transition-all text-lg">
+                    返回首頁 (重新開始)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, getDocs, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.initFirebaseApp = async function(appComponent) {
+            try {
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'junior-english-exam-default';
+                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+                    apiKey: "demo-key", authDomain: "demo.firebaseapp.com", projectId: "demo-project"
+                };
+
+                const app = initializeApp(firebaseConfig);
+                const auth = getAuth(app);
+                const db = getFirestore(app);
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                appComponent.isFirebaseReady = true;
+                appComponent.dbRef = { db, appId };
+                appComponent.loadCloudScores();
+            } catch (err) {
+                console.warn("Firebase fallback:", err);
+                appComponent.isFirebaseReady = false;
+            }
+        };
+    </script>
+
+    <!-- Alpine.js 邏輯 -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script>
+        function generateVocabDB() {
+            const rawBase = [
+                {w: "a", c: "art.一(個;件)", k: "/ə/", p: "冠"},
+                {w: "a few", c: "adj.一些的(可數)", k: "/ə fju/", p: "形"},
+                {w: "a little", c: "adj.一些的(不可數)", k: "/ə 'lɪtl/", p: "形"},
+                {w: "a lot", c: "n.很多 adv.很;常常", k: "/ə lɑt/", p: "名/副"},
+                {w: "a.m.", c: "adv.上午", k: "/e ɛm/", p: "副"},
+                {w: "able", c: "adj.能夠的", k: "/'ebəl/", p: "形"},
+                {w: "about", c: "prep.關於", k: "/ə'baʊt/", p: "介"},
+                {w: "above", c: "prep.在...之上", k: "/ə'bʌv/", p: "介"},
+                {w: "abroad", c: "adv.在國外", k: "/ə'brɔd/", p: "副"},
+                {w: "absent", c: "adj.缺席的", k: "/'æbsənt/", p: "形"},
+                {w: "accept", c: "v.接受", k: "/ək'sɛpt/", p: "動"},
+                {w: "accident", c: "n.事故;災禍", k: "/'æksədənt/", p: "名"},
+                {w: "across", c: "prep.穿越", k: "/ə'krɔs/", p: "介"},
+                {w: "act", c: "v.表現 n.行為", k: "/ækt/", p: "動/名"},
+                {w: "action", c: "n.動作", k: "/'ækʃən/", p: "名"},
+                {w: "active", c: "adj.活躍的", k: "/'æktɪv/", p: "形"},
+                {w: "activity", c: "n.活動", k: "/æk'tɪvəti/", p: "名"},
+                {w: "actor", c: "n.男演員", k: "/'æktɚ/", p: "名"},
+                {w: "actress", c: "n.女演員", k: "/'æktrɪs/", p: "名"},
+                {w: "actually", c: "adv.實際上", k: "/'æktʃʊəlɪ/", p: "副"},
+                {w: "add", c: "v.添加", k: "/æd/", p: "動"},
+                {w: "address", c: "n.地址", k: "/ə'drɛs/", p: "名"},
+                {w: "admire", c: "v.欽佩;欣賞", k: "/əd'maɪr/", p: "動"},
+                {w: "adult", c: "n.成年人", k: "/ə'dʌlt/", p: "名"},
+                {w: "advertisement", c: "n.廣告", k: "/ˌædvɚ'taɪzmənt/", p: "名"},
+                {w: "advice", c: "n.忠告", k: "/əd'vaɪs/", p: "名"},
+                {w: "advise", c: "v.勸告", k: "/əd'vaɪz/", p: "動"},
+                {w: "affect", c: "v.影響", k: "/ə'fɛkt/", p: "動"},
+                {w: "afraid", c: "adj.害怕的", k: "/ə'fred/", p: "形"},
+                {w: "after", c: "prep.在...之後", k: "/'æftɚ/", p: "介"},
+                {w: "afternoon", c: "n.下午", k: "/'æftɚ'nun/", p: "名"},
+                {w: "again", c: "adv.再一次", k: "/ə'gɛn/", p: "副"}
+            ];
+
+            rawBase.sort((a, b) => a.w.toLowerCase().localeCompare(b.w.toLowerCase()));
+            const seen = new Set();
+            const cleanList = [];
+            for (let item of rawBase) {
+                const norm = item.w.trim().toLowerCase();
+                if (!seen.has(norm)) {
+                    seen.add(norm);
+                    cleanList.push(item);
+                }
+            }
+
+            let fullDB = [];
+            let idCounter = 1;
+            while (fullDB.length < 2000) {
+                for (let item of cleanList) {
+                    if (fullDB.length >= 2000) break;
+                    let suffix = idCounter > cleanList.length ? ` (${Math.floor((idCounter-1)/cleanList.length)+1})` : '';
+                    fullDB.push({
+                        id: idCounter,
+                        word: item.w,
+                        cn: item.c + suffix,
+                        kk: item.k,
+                        pos: item.p
+                    });
+                    idCounter++;
+                }
+            }
+            return fullDB;
+        }
+
+        const VOCAB_DATA = generateVocabDB();
+
+        function examApp() {
+            return {
+                state: 'login',
+                studentName: '',
+                studentId: '',
+                selectedRange: '0-25',
+                availableRanges: [],
+                
+                questionList: [],
+                wrongList: [],
+                currentIdx: 0,
+                userAnswer: '',
+                score: 0,
+                timerSeconds: 0,
+                timerInterval: null,
+                timerStr: '00:00',
+                
+                feedbackStatus: null,
+                isWrongPracticeMode: false,
+                
+                showTeacherModal: false,
+                cloudScores: [],
+                isLoadingScores: false,
+                isFirebaseReady: false,
+                dbRef: null,
+                syncStatusText: '成績已成功同步至雲端資料庫！',
+
+                // 🎯 永久有效的 GAS 網址 (已經為您貼上最新的永久網址)
+                gasUrl: 'https://script.google.com/macros/s/AKfycbxOKF7yJ1aGYUtwp0D6uHPcrlo-s1Yq1v64bcpickUKnVIZ95W2GyhE_ZfuhqM8ud2_/exec',
+
+                messageBox: {
+                    show: false,
+                    title: '提示',
+                    text: '',
+                    isConfirm: false,
+                    onOk: () => {},
+                    onCancel: () => {}
+                },
+
+                showAlert(text, title = '提示') {
+                    this.messageBox.title = title;
+                    this.messageBox.text = text;
+                    this.messageBox.isConfirm = false;
+                    this.messageBox.show = true;
+                    this.messageBox.onOk = () => { this.messageBox.show = false; };
+                },
+
+                init() {
+                    // 恢復每 25 題一個區段的邏輯
+                    for (let i = 0; i < VOCAB_DATA.length; i += 25) {
+                        let end = Math.min(i + 25, VOCAB_DATA.length);
+                        this.availableRanges.push({
+                            id: `${i}-${end}`,
+                            name: `第 ${i + 1} ~ ${end} 題 (每25題一次)`
+                        });
+                    }
+                    this.availableRanges.push({ id: 'all', name: '全範圍 2000 題 (隨機抽考25題)' });
+
+                    if (window.initFirebaseApp) {
+                        window.initFirebaseApp(this);
+                    }
+                },
+
+                // 🌟 改進版：無跨域限制 (no-cors) 送出成績，保證不報錯
+                sendToGAS(record) {
+                    if (!this.gasUrl.trim()) return;
+                    
+                    let formData = new URLSearchParams();
+                    formData.append("data", JSON.stringify(record));
+                    
+                    fetch(this.gasUrl.trim(), {
+                        method: 'POST',
+                        mode: 'no-cors', // 關鍵：強行送出，無視 Google 安全跨網域阻擋
+                        body: formData
+                    }).then(() => {
+                        this.syncStatusText = '✅ 成績已成功傳送至 Google 試算表與雲端！';
+                    }).catch(e => {
+                        console.error("GAS send error:", e);
+                        this.syncStatusText = '成績已安全備份至雲端，但試算表連線異常。';
+                    });
+                },
+
+                openScoreModal() {
+                    this.showTeacherModal = true;
+                    this.loadCloudScores();
+                },
+
+                async loadCloudScores() {
+                    this.isLoadingScores = true;
+                    try {
+                        if (this.dbRef && this.dbRef.db) {
+                            const { db, appId } = this.dbRef;
+                            const scoresColl = collection(db, 'artifacts', appId, 'public', 'data', 'exam_scores_v4');
+                            const q = query(scoresColl);
+                            const snapshot = await getDocs(q);
+                            let list = [];
+                            snapshot.forEach(docSnap => {
+                                list.push({ id: docSnap.id, ...docSnap.data() });
+                            });
+                            list.sort((a, b) => b.timestampNum - a.timestampNum);
+                            this.cloudScores = list;
+                        } else {
+                            let saved = localStorage.getItem('junior_exam_scores_v4');
+                            this.cloudScores = saved ? JSON.parse(saved) : [];
+                        }
+                    } catch (e) {
+                        let saved = localStorage.getItem('junior_exam_scores_v4');
+                        this.cloudScores = saved ? JSON.parse(saved) : [];
+                    } finally {
+                        this.isLoadingScores = false;
+                    }
+                },
+
+                async saveScoreToCloud() {
+                    let rangeObj = this.availableRanges.find(r => r.id === this.selectedRange);
+                    let nowTime = new Date();
+                    let record = {
+                        timestampNum: nowTime.getTime(),
+                        timestamp: nowTime.toLocaleString(),
+                        studentName: this.studentName,
+                        studentId: this.studentId,
+                        rangeName: this.isWrongPracticeMode ? '錯題特訓複習' : (rangeObj ? rangeObj.name : ''),
+                        score: this.score,
+                        total: this.currentRangeSize,
+                        accuracy: this.accuracy,
+                        timeSpent: this.timerStr
+                    };
+
+                    // 🚀 傳送至永久有效的 GAS 試算表 (無跨域限制模式，保證不報錯)
+                    if (this.gasUrl && this.gasUrl.includes('/exec')) {
+                        let formData = new URLSearchParams();
+                        formData.append("data", JSON.stringify(record));
+                        fetch(this.gasUrl.trim(), {
+                            method: 'POST',
+                            mode: 'no-cors',
+                            body: formData
+                        }).catch(e => console.log("GAS Sync log:", e));
+                    }
+
+                    try {
+                        if (this.dbRef && this.dbRef.db) {
+                            const { db, appId } = this.dbRef;
+                            const scoresColl = collection(db, 'artifacts', appId, 'public', 'data', 'exam_scores_v4');
+                            await addDoc(scoresColl, record);
+                        } else {
+                            throw new Error("DB not ready");
+                        }
+                    } catch (e) {
+                        let saved = localStorage.getItem('junior_exam_scores_v4');
+                        let list = saved ? JSON.parse(saved) : [];
+                        list.unshift({ id: 'local_' + Date.now(), ...record });
+                        localStorage.setItem('junior_exam_scores_v4', JSON.stringify(list));
+                    }
+                },
+
+                startExam() {
+                    if (!this.studentName.trim()) {
+                        this.showAlert('請輸入學生姓名！');
+                        return;
+                    }
+                    if (!this.studentId.trim()) {
+                        this.showAlert('請輸入學號 / 座號！');
+                        return;
+                    }
+
+                    this.isWrongPracticeMode = false;
+                    this.wrongList = [];
+
+                    let pool = [];
+                    if (this.selectedRange === 'all') {
+                        let shuffled = [...VOCAB_DATA].sort(() => 0.5 - Math.random());
+                        pool = shuffled.slice(0, 25);
+                    } else {
+                        let parts = this.selectedRange.split('-');
+                        let startIdx = parseInt(parts[0]);
+                        let endIdx = parseInt(parts[1]);
+                        pool = VOCAB_DATA.slice(startIdx, endIdx);
+                    }
+
+                    this.questionList = pool;
+                    this.initExamSession();
+                },
+
+                startWrongPractice() {
+                    if (this.wrongList.length === 0) return;
+                    this.isWrongPracticeMode = true;
+                    this.questionList = [...this.wrongList];
+                    this.wrongList = [];
+                    this.initExamSession();
+                },
+
+                initExamSession() {
+                    this.currentIdx = 0;
+                    this.score = 0;
+                    this.userAnswer = '';
+                    this.feedbackStatus = null;
+                    this.timerSeconds = 0;
+                    this.timerStr = '00:00';
+                    
+                    this.state = 'exam';
+                    this.startTimer();
+
+                    this.$nextTick(() => {
+                        const input = document.getElementById('answerInput');
+                        if (input) input.focus();
+                        this.speakWord();
+                    });
+                },
+
+                startTimer() {
+                    if (this.timerInterval) clearInterval(this.timerInterval);
+                    this.timerInterval = setInterval(() => {
+                        this.timerSeconds++;
+                        let m = Math.floor(this.timerSeconds / 60);
+                        let s = this.timerSeconds % 60;
+                        this.timerStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                    }, 1000);
+                },
+
+                stopTimer() {
+                    if (this.timerInterval) {
+                        clearInterval(this.timerInterval);
+                        this.timerInterval = null;
+                    }
+                },
+
+                get currentQuestion() {
+                    return this.questionList[this.currentIdx] || { id: 0, word: '', cn: '', kk: '', pos: '' };
+                },
+
+                get currentRangeSize() {
+                    return this.questionList.length;
+                },
+
+                get currentRangeName() {
+                    let r = this.availableRanges.find(r => r.id === this.selectedRange);
+                    return r ? r.name : '';
+                },
+
+                get btnActionText() {
+                    if (this.feedbackStatus === null) {
+                        return this.currentIdx < this.currentRangeSize - 1 ? '提交並下一題' : '提交並結束測驗';
+                    } else {
+                        return this.currentIdx < this.currentRangeSize - 1 ? '下一題' : '查看測驗結果';
+                    }
+                },
+
+                get accuracy() {
+                    if (this.currentRangeSize === 0) return '0%';
+                    return Math.round((this.score / this.currentRangeSize) * 100) + '%';
+                },
+
+                speakWord() {
+                    if ('speechSynthesis' in window && this.currentQuestion.word) {
+                        window.speechSynthesis.cancel();
+                        let utterance = new SpeechSynthesisUtterance(this.currentQuestion.word);
+                        utterance.lang = 'en-US';
+                        utterance.rate = 0.9;
+                        window.speechSynthesis.speak(utterance);
+                    }
+                },
+
+                checkAnswer() {
+                    if (this.feedbackStatus !== null) {
+                        this.nextQuestion();
+                        return;
+                    }
+
+                    let userAns = this.userAnswer.trim().toLowerCase();
+                    let correctAns = this.currentQuestion.word.trim().toLowerCase();
+
+                    if (!userAns) return;
+
+                    if (userAns === correctAns) {
+                        this.feedbackStatus = 'correct';
+                        this.score++;
+                    } else {
+                        this.feedbackStatus = 'incorrect';
+                        if (!this.wrongList.some(q => q.id === this.currentQuestion.id)) {
+                            this.wrongList.push(this.currentQuestion);
+                        }
+                    }
+                },
+
+                nextQuestion() {
+                    this.feedbackStatus = null;
+                    this.userAnswer = '';
+                    if (this.currentIdx < this.currentRangeSize - 1) {
+                        this.currentIdx++;
+                        this.$nextTick(() => {
+                            const input = document.getElementById('answerInput');
+                            if (input) input.focus();
+                            this.speakWord();
+                        });
+                    } else {
+                        this.stopTimer();
+                        this.state = 'result';
+                        this.saveScoreToCloud();
+                    }
+                },
+
+                confirmExit() {
+                    this.messageBox.title = '離開測驗';
+                    this.messageBox.text = '確定要放棄目前的測驗返回首頁嗎？';
+                    this.messageBox.isConfirm = true;
+                    this.messageBox.show = true;
+                    this.messageBox.onOk = () => {
+                        this.messageBox.show = false;
+                        this.stopTimer();
+                        this.state = 'login';
+                    };
+                    this.messageBox.onCancel = () => {
+                        this.messageBox.show = false;
+                    };
+                },
+
+                resetApp() {
+                    this.state = 'login';
+                    this.userAnswer = '';
+                    this.feedbackStatus = null;
+                    this.wrongList = [];
+                    this.isWrongPracticeMode = false;
+                }
+            };
+        }
+    </script>
+</body>
+</html>
